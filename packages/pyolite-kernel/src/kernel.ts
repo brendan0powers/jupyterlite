@@ -7,6 +7,7 @@ import { BaseKernel, IKernel } from '@jupyterlite/kernel';
 import { PromiseDelegate } from '@lumino/coreutils';
 
 import worker from './worker?raw';
+import serialWorker from './serialworker?raw';
 
 import { PIPLITE_WHEEL } from './_pypi';
 
@@ -64,6 +65,8 @@ export class PyoliteKernel extends BaseKernel implements IKernel {
       `var _pipliteUrls = ${JSON.stringify(pipliteUrls)};`,
       // ...but maybe not PyPI...
       `var _disablePyPIFallback = ${JSON.stringify(!!options.disablePyPIFallback)};`,
+      // ...some serialworker stuff
+      `var _serialWorker = ${JSON.stringify({ text: serialWorker.toString() })};`,
       // ...finally, the worker... which _must_ appear last!
       worker.toString(),
     ];

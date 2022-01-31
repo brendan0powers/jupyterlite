@@ -38,10 +38,16 @@ def patch_pillow():
 
     PILImage.Image._repr_png_ = _repr_png_
 
+def patch_time():
+    import time
+    import sync_helpers
+
+    time.sleep = sync_helpers.blockingSleep
 
 ALL_PATCHES = [
     patch_pillow,
     patch_matplotlib,
+    patch_time,
 ]
 
 
@@ -50,6 +56,7 @@ def apply_patches():
 
     for patch in ALL_PATCHES:
         try:
+            print("Patching", patch)
             patch()
         except Exception as err:
             warnings.warn("failed to apply patch", patch, err)

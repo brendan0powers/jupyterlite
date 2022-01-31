@@ -22,6 +22,160 @@ let stderr_stream: any;
 // @ts-ignore: breaks typedoc
 let resolveInputReply: any;
 
+class WebSerialPort {
+  constructor() {
+    const blob = new Blob([_serialWorker.text]);
+    this._worker = new Worker(URL.createObjectURL(blob));
+
+    this._worker.postMessage({
+      type: 'setup',
+      data: [this._notifyBuffer, this._replyBuffer],
+    });
+  }
+
+  open(index: number, options = {}) {
+    if (this._open) {
+      throw new Error('The port is already open');
+    }
+
+    this.sendMessage('open', { index, options });
+    this._open = true;
+  }
+
+  close() {
+    if (!this._open) {
+      return;
+    }
+
+    if (this._worker) {
+      this.sendMessage('close');
+
+      this._worker.terminate();
+      this._worker = null;
+    }
+    this._open = false;
+  }
+
+  sleep(seconds: number) {
+    this.sendMessage('sleep', seconds);
+  }
+
+  write(data: any) {
+    this.sendMessage('write', data.toJs());
+  }
+
+  read() {
+    const data = this.sendMessage('read');
+    return pyodide.runPython('bytes(data)', pyodide.toPy({ data }));
+  }
+
+  private sendMessage(type: string, data = {}) {
+    if (!this._worker) {
+      throw new Error('Serial worker is null');
+    }
+
+    this._notifyBuffer[0] = 0;
+    this._worker.postMessage({
+      type,
+      data,
+    });
+
+    // Block while we wait for the reply
+    while (Atomics.wait(this._notifyBuffer, 0, 0, 50) === 'timed-out') {
+      pyodide.checkInterrupt();
+    }
+
+    // Decode result from the reply buffer
+    const numBytes = this._notifyBuffer[1];
+    const jsonEncoded = this._notifyBuffer[2] === 0;
+    const isError = this._notifyBuffer[3] === 1;
+    let result: any = undefined;
+    if (jsonEncoded) {
+      if (numBytes > 0) {
+        const localArray = new Uint8Array(numBytes);
+        localArray.set(this._replyBuffer.subarray(0, numBytes));
+
+        const decoder = new TextDecoder();
+        const jsonStr = decoder.decode(localArray);
+        result = JSON.parse(jsonStr);
+      }
+    } else {
+      // Raw
+      const localArray = new Uint8Array(numBytes);
+      localArray.set(this._replyBuffer.subarray(0, numBytes));
+
+      result = localArray;
+    }
+
+    if (isError) {
+      throw new Error(result);
+    }
+
+    return result;
+  }
+
+  private _open = false;
+  private _worker: Worker | null = null;
+  // Layout in bytes (trigger [0, 1], length, encoding [0, 1], isError [0, 1])
+  private _notifyBuffer = new Int32Array(new SharedArrayBuffer(4 * 4));
+  private _replyBuffer = new Uint8Array(new SharedArrayBuffer(1024 * 1024));
+}
+
+function loadWebSerial(pyodide: any) {
+  const module = {
+    WebSerialPort,
+    open(index: number, options = {}) {
+      const port = new WebSerialPort();
+      port.open(index, options);
+      return port;
+    },
+    list() {
+      return [];
+    },
+    prompt() {
+      pyodide.runPython(`
+from IPython.display import display, Javascript, HTML
+display(HTML("""
+<script>
+async function openSerialPort() {
+    const result = await navigator.serial.requestPort();
+    return result;
+}
+
+openSerialPort();
+</script>
+"""))
+`);
+    },
+  };
+
+  pyodide.registerJsModule('webserial', module);
+}
+
+function blockingSleep(seconds: number) {
+  const timeoutInterval = 100; // 100ms between interrupt checks
+  const millis = Math.floor(seconds * 1000);
+  const loops = Math.floor(millis / timeoutInterval);
+  const msRemaining = millis % timeoutInterval;
+
+  const buffer = new Int32Array(new SharedArrayBuffer(4));
+  buffer[0] = 0;
+  for (let i = 0; i < loops; i++) {
+    Atomics.wait(buffer, 0, 0, timeoutInterval);
+    pyodide.checkInterrupt();
+  }
+
+  Atomics.wait(buffer, 0, 0, msRemaining);
+}
+
+function setupMocks() {
+  const module = {
+    blockingSleep,
+  };
+
+  pyodide.registerJsModule('sync_helpers', module);
+}
+
 /**
  * Load pyodide and initialize the interpreter.
  *
@@ -32,6 +186,8 @@ let resolveInputReply: any;
 async function loadPyodideAndPackages() {
   // as of 0.17.0 indexURL must be provided
   pyodide = await loadPyodide({ indexURL });
+
+  setupMocks();
 
   // this is the only use of `loadPackage`, allow `piplite` to handle the rest
   await pyodide.loadPackage(['micropip']);
@@ -59,6 +215,8 @@ async function loadPyodideAndPackages() {
     ], keep_going=True);
     import pyolite
   `);
+
+  loadWebSerial(pyodide);
 
   // make copies of these so they don't get garbage collected
   kernel = pyodide.globals.get('pyolite').kernel_instance.copy();

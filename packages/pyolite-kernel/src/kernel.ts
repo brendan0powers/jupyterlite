@@ -7,7 +7,7 @@ import { BaseKernel, IKernel } from '@jupyterlite/kernel';
 import { PromiseDelegate } from '@lumino/coreutils';
 
 import worker from './worker?raw';
-import serialWorker from './serialworker?raw';
+import asyncWorker from './asyncworker?raw';
 
 import { PIPLITE_WHEEL } from './_pypi';
 
@@ -32,6 +32,7 @@ export class PyoliteKernel extends BaseKernel implements IKernel {
       this._processWorkerMessage(e.data);
     };
     this.setupInterruptBuffer();
+    this.startAsyncThread();
     this._ready.resolve();
   }
 
@@ -65,8 +66,8 @@ export class PyoliteKernel extends BaseKernel implements IKernel {
       `var _pipliteUrls = ${JSON.stringify(pipliteUrls)};`,
       // ...but maybe not PyPI...
       `var _disablePyPIFallback = ${JSON.stringify(!!options.disablePyPIFallback)};`,
-      // ...some serialworker stuff
-      `var _serialWorker = ${JSON.stringify({ text: serialWorker.toString() })};`,
+      // ...some asyncWorker stuff
+      `var _asyncWorkerText = ${JSON.stringify({ text: asyncWorker.toString() })};`,
       // ...finally, the worker... which _must_ appear last!
       worker.toString(),
     ];
@@ -123,6 +124,47 @@ export class PyoliteKernel extends BaseKernel implements IKernel {
       data: this._interruptBuffer,
       parent: {},
     });
+  }
+
+  private startAsyncThread(): void {
+    const channel = new MessageChannel();
+    const asyncThreadPort = channel.port1;
+
+    asyncThreadPort.onmessage = async (event: MessageEvent) => {
+      const message = event.data;
+      switch (message.type) {
+        case 'requestPort': {
+          try {
+            const port = await navigator.serial.requestPort();
+            const ports = await navigator.serial.getPorts();
+            const index = ports.findIndex((p: SerialPort) => p === port);
+            console.log(`Port idx ${index}`);
+            asyncThreadPort.postMessage({
+              type: 'portReply',
+              data: index,
+            });
+          } catch (e) {
+            console.error(e);
+            asyncThreadPort.postMessage({
+              type: 'portReply',
+              data: -1,
+            });
+          }
+          break;
+        }
+        default:
+          break;
+      }
+    };
+
+    this._worker.postMessage(
+      {
+        type: 'start-async-thread',
+        data: null,
+        parent: this.parent,
+      },
+      [channel.port2]
+    );
   }
 
   /**

@@ -2,6 +2,7 @@
 from ipykernel import CommManager
 from IPython.utils.tokenutil import line_at_cursor, token_at_cursor
 from pyodide_js import loadPackagesFromImports as _load_packages_from_imports
+import asyncio
 
 
 class Pyolite:
@@ -79,6 +80,14 @@ class Pyolite:
         except Exception:
             self.interpreter.showtraceback()
         else:
+            # HACK HACK HACK!
+            # This is and ugly hack to work around an issue where the async worker
+            # Thread neesd to start, and control must return to the even loop
+            # before we can use atomics to block. Otherwise, te cell execution
+            # will hang forever!
+            await asyncio.sleep(0)
+            # </hack>
+
             if self.interpreter.should_run_async(code):
                 await self.interpreter.run_cell_async(code, store_history=True)
             else:

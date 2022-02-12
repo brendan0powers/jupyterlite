@@ -22,23 +22,118 @@ let stderr_stream: any;
 // @ts-ignore: breaks typedoc
 let resolveInputReply: any;
 
-class WebSerialPort {
-  constructor() {
-    const blob = new Blob([_serialWorker.text]);
-    this._worker = new Worker(URL.createObjectURL(blob));
+function promptForPort() {
+  pyodide.runPython(`
+from IPython.display import display, Javascript, HTML
+display(HTML("""
+<script>
+async function openSerialPort() {
+const result = await navigator.serial.requestPort();
+return result;
+}
+</script>
 
-    this._worker.postMessage({
+<div style='{display: flex}'>
+<button onclick='openSerialPort()' />Select Port</button>
+Please select a serial port, and re-run this code cell.
+</div>
+"""))
+`);
+}
+
+let _asyncWorker: Worker | null = null;
+// Layout in bytes (trigger [0, 1], length, encoding [0, 1], isError [0, 1])
+const _notifyBuffer2 = new Int32Array(new SharedArrayBuffer(4 * 4));
+const _replyBuffer2 = new Uint8Array(new SharedArrayBuffer(1024 * 1024));
+
+function setupSerialWorker(event: MessageEvent) {
+  const blob = new Blob([_asyncWorkerText.text]);
+  _asyncWorker = new Worker(URL.createObjectURL(blob));
+
+  _asyncWorker.postMessage(
+    {
       type: 'setup',
-      data: [this._notifyBuffer, this._replyBuffer],
-    });
+      data: [_notifyBuffer2, _replyBuffer2],
+    },
+    [event.ports[0]]
+  );
+}
+
+function sendSyncMessage(type: string, data = {}) {
+  if (!_asyncWorker) {
+    throw new Error('Serial worker is null');
   }
 
-  open(index: number, options = {}) {
+  _notifyBuffer2[0] = 0;
+  _asyncWorker.postMessage({
+    type,
+    data,
+  });
+
+  // Block while we wait for the reply
+  while (Atomics.wait(_notifyBuffer2, 0, 0, 50) === 'timed-out') {
+    pyodide.checkInterrupt();
+  }
+
+  // Decode result from the reply buffer
+  const numBytes = _notifyBuffer2[1];
+  const jsonEncoded = _notifyBuffer2[2] === 0;
+  const isError = _notifyBuffer2[3] === 1;
+  let result: any = undefined;
+  if (jsonEncoded) {
+    if (numBytes > 0) {
+      const localArray = new Uint8Array(numBytes);
+      localArray.set(_replyBuffer2.subarray(0, numBytes));
+
+      const decoder = new TextDecoder();
+      const jsonStr = decoder.decode(localArray);
+      result = JSON.parse(jsonStr);
+    }
+  } else {
+    // Raw
+    const localArray = new Uint8Array(numBytes);
+    localArray.set(_replyBuffer2.subarray(0, numBytes));
+
+    result = localArray;
+  }
+
+  if (isError) {
+    throw new Error(result);
+  }
+
+  return result;
+}
+
+class WebSerialPort {
+  constructor() {
+    this._id = sendSyncMessage('createPort');
+  }
+
+  open(options: { port_num?: number; always_prompt?: boolean } = {}) {
+    // eslint-disable-next-line prefer-const
+    let { port_num = 0, always_prompt = true, ...port_optoins } = options;
+
     if (this._open) {
       throw new Error('The port is already open');
     }
 
-    this.sendMessage('open', { index, options });
+    const numPorts = sendSyncMessage('numPorts');
+    console.log(`Numports: ${numPorts} port_num: ${port_num}}`);
+    if (port_num >= numPorts || always_prompt) {
+      port_num = sendSyncMessage('prompt');
+      if (port_num < 0) {
+        promptForPort();
+        pyodide.runPython(
+          'raise RuntimeError("There are no ports availble. Please select one.")'
+        );
+      }
+    }
+
+    sendSyncMessage('openPort', {
+      id: this._id,
+      index: port_num,
+      options: port_optoins,
+    });
     this._open = true;
   }
 
@@ -47,106 +142,38 @@ class WebSerialPort {
       return;
     }
 
-    if (this._worker) {
-      this.sendMessage('close');
-
-      this._worker.terminate();
-      this._worker = null;
-    }
+    sendSyncMessage('closePort', { id: this._id });
     this._open = false;
   }
 
-  sleep(seconds: number) {
-    this.sendMessage('sleep', seconds);
-  }
-
   write(data: any) {
-    this.sendMessage('write', data.toJs());
+    sendSyncMessage('writePort', { id: this._id, data: data.toJs() });
   }
 
   read() {
-    const data = this.sendMessage('read');
+    const data = sendSyncMessage('readPort', { id: this._id });
     return pyodide.runPython('bytes(data)', pyodide.toPy({ data }));
   }
 
-  private sendMessage(type: string, data = {}) {
-    if (!this._worker) {
-      throw new Error('Serial worker is null');
-    }
-
-    this._notifyBuffer[0] = 0;
-    this._worker.postMessage({
-      type,
-      data,
-    });
-
-    // Block while we wait for the reply
-    while (Atomics.wait(this._notifyBuffer, 0, 0, 50) === 'timed-out') {
-      pyodide.checkInterrupt();
-    }
-
-    // Decode result from the reply buffer
-    const numBytes = this._notifyBuffer[1];
-    const jsonEncoded = this._notifyBuffer[2] === 0;
-    const isError = this._notifyBuffer[3] === 1;
-    let result: any = undefined;
-    if (jsonEncoded) {
-      if (numBytes > 0) {
-        const localArray = new Uint8Array(numBytes);
-        localArray.set(this._replyBuffer.subarray(0, numBytes));
-
-        const decoder = new TextDecoder();
-        const jsonStr = decoder.decode(localArray);
-        result = JSON.parse(jsonStr);
-      }
-    } else {
-      // Raw
-      const localArray = new Uint8Array(numBytes);
-      localArray.set(this._replyBuffer.subarray(0, numBytes));
-
-      result = localArray;
-    }
-
-    if (isError) {
-      throw new Error(result);
-    }
-
-    return result;
-  }
-
   private _open = false;
-  private _worker: Worker | null = null;
-  // Layout in bytes (trigger [0, 1], length, encoding [0, 1], isError [0, 1])
-  private _notifyBuffer = new Int32Array(new SharedArrayBuffer(4 * 4));
-  private _replyBuffer = new Uint8Array(new SharedArrayBuffer(1024 * 1024));
+  private _id = '';
 }
 
 function loadWebSerial(pyodide: any) {
   const module = {
     WebSerialPort,
-    open(index: number, options = {}) {
+    open(options = {}) {
       const port = new WebSerialPort();
-      port.open(index, options);
+      port.open(options);
       return port;
     },
     list() {
       return [];
     },
-    prompt() {
-      pyodide.runPython(`
-from IPython.display import display, Javascript, HTML
-display(HTML("""
-<script>
-async function openSerialPort() {
-    const result = await navigator.serial.requestPort();
-    return result;
-}
-
-openSerialPort();
-</script>
-"""))
-`);
+    sleep(seconds: number) {
+      sendSyncMessage('sleep', seconds);
     },
+    prompt: promptForPort,
   };
 
   pyodide.registerJsModule('webserial', module);
@@ -174,6 +201,14 @@ function setupMocks() {
   };
 
   pyodide.registerJsModule('sync_helpers', module);
+}
+
+async function installExtras() {
+  await pyodide.runPythonAsync(`
+    await piplite.install([
+       'micro-marionette',
+    ], keep_going=True)
+  `);
 }
 
 /**
@@ -217,6 +252,7 @@ async function loadPyodideAndPackages() {
   `);
 
   loadWebSerial(pyodide);
+  await installExtras();
 
   // make copies of these so they don't get garbage collected
   kernel = pyodide.globals.get('pyolite').kernel_instance.copy();
@@ -591,6 +627,10 @@ self.onmessage = async (event: MessageEvent): Promise<void> => {
     case 'set-interrupt-buffer':
       results = setInterruptBuffer(messageContent);
       return; // Do not reply. A reply would end any in-process cell execution
+
+    case 'start-async-thread':
+      results = setupSerialWorker(event);
+      break;
 
     default:
       break;

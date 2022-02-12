@@ -11,7 +11,7 @@ import { PageConfig } from '@jupyterlab/coreutils';
 const styles = import('./style.js');
 
 const serverExtensions = [
-  import('@jupyterlite/javascript-kernel-extension'),
+  //import('@jupyterlite/javascript-kernel-extension'),
   import('@jupyterlite/pyolite-kernel-extension'),
   import('@jupyterlite/server-extension')
 ];

@@ -2681,19 +2681,6 @@
     "@lumino/coreutils" "^1.12.0"
     "@lumino/widgets" "^1.31.1"
 
-"@jupyterlite/javascript-kernel-extension@file:packages/javascript-kernel-extension":
-  version "0.1.0-beta.4"
-  dependencies:
-    "@jupyterlab/coreutils" "~5.3.2"
-    "@jupyterlite/javascript-kernel" "^0.1.0-beta.4"
-    "@jupyterlite/kernel" "^0.1.0-beta.4"
-    "@jupyterlite/server" "^0.1.0-beta.4"
-
-"@jupyterlite/javascript-kernel@file:packages/javascript-kernel":
-  version "0.1.0-beta.4"
-  dependencies:
-    "@jupyterlite/kernel" "^0.1.0-beta.4"
-
 "@jupyterlite/kernel@file:packages/kernel":
   version "0.1.0-beta.4"
   dependencies:

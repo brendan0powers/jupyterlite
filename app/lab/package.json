@@ -148,7 +148,8 @@
     "es6-promise": "~4.2.8",
     "react": "^17.0.1",
     "react-dom": "^17.0.1",
-    "yjs": "^13.5.6"
+    "yjs": "^13.5.6",
+    "browserfs": "^1.4.3"
   },
   "jupyterlab": {
     "extensions": [

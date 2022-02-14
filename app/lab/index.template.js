@@ -214,6 +214,11 @@ async function main() {
   /* eslint-disable no-console */
   await lab.start();
   await lab.restored;
+  console.log(`${lab.name} restored`);
+
+  // Remove loading element
+  let element = document.getElementById("marionette-loading");
+  element.parentNode.removeChild(element);
 }
 
 main();

@@ -282,8 +282,9 @@ export class Contents implements IContents {
     const storage = await this.storage;
     const item = await storage.getItem(path);
     const serverItem = await this._getServerContents(path, options);
+    const writable = !serverItem;
 
-    const model = (item || serverItem) as IModel | null;
+    const model = (serverItem || item) as IModel | null;
 
     if (!model) {
       return null;
@@ -292,6 +293,7 @@ export class Contents implements IContents {
     if (!options?.content) {
       return {
         ...model,
+        writable,
         content: null,
         size: undefined,
       };
@@ -327,7 +329,7 @@ export class Contents implements IContents {
         mimetype: MIME.JSON,
         content,
         size: undefined,
-        writable: true,
+        writable,
         type: 'directory',
       };
     }
@@ -344,6 +346,10 @@ export class Contents implements IContents {
    */
   async rename(oldLocalPath: string, newLocalPath: string): Promise<IModel> {
     const path = decodeURIComponent(oldLocalPath);
+    if (await this._isServerPath(oldLocalPath)) {
+      throw new Error('Unable to rename sample content');
+    }
+
     const file = await this.get(path, { content: true });
     if (!file) {
       throw Error(`Could not find file with path ${path}`);
@@ -386,6 +392,11 @@ export class Contents implements IContents {
    */
   async save(path: string, options: Partial<IModel> = {}): Promise<IModel | null> {
     path = decodeURIComponent(path);
+
+    if (await this._isServerPath(path)) {
+      throw new Error('Example conent is read-only. Use "Save As" to make a copy.');
+    }
+
     let item = (await this.get(path)) || (await this.newUntitled({ path }));
     if (!item) {
       return null;
@@ -442,6 +453,11 @@ export class Contents implements IContents {
     const toDelete = (await (await this.storage).keys()).filter(
       (key) => key === path || key.startsWith(slashed)
     );
+
+    if (await this._isServerPath(path)) {
+      throw new Error('Unable to delete sample content');
+    }
+
     await Promise.all(toDelete.map(this.forgetPath, this));
   }
 
@@ -537,6 +553,12 @@ export class Contents implements IContents {
     await (await this.checkpoints).setItem(path, copies);
   }
 
+  private async _isServerPath(path: string): Promise<boolean> {
+    const model = await this._getServerContents(path, { content: false });
+
+    return !!model;
+  }
+
   /**
    * retrieve the contents for this path from the union of local storage and
    * `api/contents/{path}/all.json`.
@@ -557,9 +579,7 @@ export class Contents implements IContents {
 
     // layer in contents that don't have local overwrites
     for (const file of (await this._getServerDirectory(path)).values()) {
-      if (!content.has(file.path)) {
-        content.set(file.path, file);
-      }
+      content.set(file.path, file);
     }
 
     if (path && content.size === 0) {
@@ -655,6 +675,12 @@ export class Contents implements IContents {
         }
       }
     }
+
+    // All server side content is read-only
+    model = {
+      ...model,
+      writable: false,
+    };
 
     return model;
   }

@@ -14,4 +14,7 @@ declare let _pipliteUrls: string[];
 declare let _disablePyPIFallback: boolean;
 declare let _asyncWorkerText: { text: string };
 declare let pyodide: any;
+declare let Module: any;
 declare let loadPyodide: any;
+
+declare const BrowserFS: any;

@@ -8,12 +8,45 @@ import { PromiseDelegate } from '@lumino/coreutils';
 
 import worker from './worker?raw';
 import asyncWorker from './asyncworker?raw';
+import browserfsModule from 'browserfs?raw';
 
 import { PIPLITE_WHEEL } from './_pypi';
 
 const INTERRUPT_WARNING = `The interrupt button is currently not functional.
 For the button to function, JupyterLite must be deployed with the correct HTTP headers.
 For more information, see: https://jupyterlite.readthedocs.io/en/latest/deploying.html#http_headers`;
+
+declare global {
+  // eslint-disable-next-line @typescript-eslint/naming-convention
+  interface WindowOrWorkerGlobalScope {
+    process: any;
+  }
+}
+
+async function setupBrowserFs() {
+  if (window.process) {
+    return;
+  }
+
+  BrowserFS.install(window);
+  return new Promise<void>((resolve, reject) => {
+    BrowserFS.configure(
+      {
+        fs: 'LocalStorage',
+        options: {},
+      },
+      (e: any) => {
+        if (e) {
+          console.error(e);
+          reject(e);
+          return;
+        }
+        console.log('FS initialized');
+        resolve();
+      }
+    );
+  });
+}
 
 /**
  * A kernel that executes Python code with Pyodide.
@@ -28,6 +61,8 @@ export class PyoliteKernel extends BaseKernel implements IKernel {
     super(options);
     const blob = new Blob([this.buildWorkerScript(options).join('\n')]);
     this._worker = new Worker(window.URL.createObjectURL(blob));
+    setupBrowserFs();
+    BrowserFS.FileSystem.WorkerFS.attachRemoteListener(this._worker);
     this._worker.onmessage = (e) => {
       this._processWorkerMessage(e.data);
     };
@@ -68,6 +103,7 @@ export class PyoliteKernel extends BaseKernel implements IKernel {
       `var _disablePyPIFallback = ${JSON.stringify(!!options.disablePyPIFallback)};`,
       // ...some asyncWorker stuff
       `var _asyncWorkerText = ${JSON.stringify({ text: asyncWorker.toString() })};`,
+      browserfsModule.toString(),
       // ...finally, the worker... which _must_ appear last!
       worker.toString(),
     ];

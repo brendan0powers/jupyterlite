@@ -257,6 +257,14 @@ module.exports = [
       fallback: {
         util: false,
       },
+      alias: {
+        fs: 'browserfs/dist/shims/fs.js',
+        buffer: 'browserfs/dist/shims/buffer.js',
+        path: 'browserfs/dist/shims/path.js',
+        processGlobal: 'browserfs/dist/shims/process.js',
+        bufferGlobal: 'browserfs/dist/shims/bufferGlobal.js',
+        bfsGlobal: require.resolve('browserfs'),
+      },
     },
     output: {
       path: topLevelBuild,
@@ -296,6 +304,7 @@ module.exports = [
           type: 'asset/resource',
         },
       ],
+      noParse: /browserfs\.js/,
     },
     optimization: {
       moduleIds: 'deterministic',
@@ -320,6 +329,11 @@ module.exports = [
         ),
       }),
       new CompileSchemasPlugin(),
+      new webpack.ProvidePlugin({
+        BrowserFS: 'bfsGlobal',
+        process: 'processGlobal',
+        Buffer: 'bufferGlobal',
+      }),
       ...allHtmlPlugins,
     ],
   }),

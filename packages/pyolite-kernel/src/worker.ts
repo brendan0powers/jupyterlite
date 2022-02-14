@@ -203,6 +203,32 @@ function setupMocks() {
   pyodide.registerJsModule('sync_helpers', module);
 }
 
+async function setupWorkerFs() {
+  await new Promise<void>((resolve, reject) => {
+    BrowserFS.configure(
+      {
+        fs: 'AsyncMirror',
+        options: {
+          sync: { fs: 'InMemory' },
+          async: { fs: 'WorkerFS', options: { worker: self } },
+        },
+      },
+      (e: any) => {
+        if (e) {
+          reject(e);
+          return;
+        }
+        resolve();
+      }
+    );
+  });
+
+  console.log('What?', [Module.FS, Module.PATH, Module.ERRNO_CODES]);
+  const BFS = new BrowserFS.EmscriptenFS(Module.FS, Module.PATH, Module.ERRNO_CODES);
+  Module.FS.mkdir('/data123');
+  Module.FS.mount(BFS, { root: '/' }, '/data123');
+}
+
 async function installExtras() {
   await pyodide.runPythonAsync(`
     await piplite.install([
@@ -252,6 +278,7 @@ async function loadPyodideAndPackages() {
   `);
 
   loadWebSerial(pyodide);
+  await setupWorkerFs();
   await installExtras();
 
   // make copies of these so they don't get garbage collected
